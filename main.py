@@ -309,6 +309,66 @@ def avalanche_analysis(plaintext: bytes, password: bytes):
     return avg, (avg / 128) * 100, results
 
 # ─────────────────────────────────────────────
+#  BRUTE FORCE SIMULATION HELPERS
+# ─────────────────────────────────────────────
+
+WEAK_PASSWORDS = [
+    "password", "123456", "qwerty", "abc123", "letmein",
+    "monkey", "dragon", "master", "sunshine", "princess",
+    "admin", "login", "welcome", "shadow", "superman",
+    "iloveyou", "trustno1", "hello", "password1", "test",
+]
+
+def estimate_crack_time(password: str) -> dict:
+    """
+    Estimate cracking resistance under two scenarios:
+      A) Plain MD5/SHA-256 (fast hash, ~10 billion/sec on GPU cluster)
+      B) Argon2id t=2 m=64MB  (~10 guesses/sec on same hardware)
+    """
+    charset = 0
+    if any(c.islower() for c in password): charset += 26
+    if any(c.isupper() for c in password): charset += 26
+    if any(c.isdigit() for c in password): charset += 10
+    if any(not c.isalnum() for c in password): charset += 32
+    charset = max(charset, 1)
+
+    keyspace      = charset ** len(password)
+    SHA256_RATE   = 10_000_000_000   # 10 B/sec modern GPU cluster
+    ARGON2_RATE   = 10               # ~10/sec with 64 MB per hash
+
+    sha_secs  = keyspace / 2 / SHA256_RATE
+    arg_secs  = keyspace / 2 / ARGON2_RATE
+
+    def fmt(secs):
+        if secs < 1:         return "< 1 second",       "CRITICAL"
+        if secs < 60:        return f"{secs:.1f}s",      "CRITICAL"
+        if secs < 3600:      return f"{secs/60:.1f} min","WEAK"
+        if secs < 86400:     return f"{secs/3600:.1f} hr","WEAK"
+        if secs < 2592000:   return f"{secs/86400:.1f} days","MODERATE"
+        if secs < 31536000:  return f"{secs/2592000:.1f} mo","STRONG"
+        y = secs / 31536000
+        if y < 1e6:          return f"{y:,.0f} yrs",    "STRONG"
+        if y < 1e12:         return f"{y:.2e} yrs",     "VERY STRONG"
+        return f"{y:.2e} yrs", "UNBREAKABLE"
+
+    sha_str,  sha_rating = fmt(sha_secs)
+    arg_str,  arg_rating = fmt(arg_secs)
+    speedup = max(arg_secs, 1e-9) / max(sha_secs, 1e-9)   # how much SLOWER argon2 is for attacker
+
+    return {
+        "length":          len(password),
+        "charset":         charset,
+        "keyspace":        keyspace,
+        "sha256_secs":     sha_secs,
+        "sha256_str":      sha_str,
+        "sha256_rating":   sha_rating,
+        "argon2_secs":     arg_secs,
+        "argon2_str":      arg_str,
+        "argon2_rating":   arg_rating,
+        "slowdown_factor": arg_secs / max(sha_secs, 1e-9),
+    }
+
+# ─────────────────────────────────────────────
 #  COLOR PALETTE  (dark terminal)
 # ─────────────────────────────────────────────
 
@@ -877,117 +937,173 @@ class XDESApp(tk.Tk):
         self._write(self.tr_out, "\n".join(lines))
         self._status(self.tr_status, f"✓  Trace done. CT: {ct.hex().upper()}", GREEN)
 
-    # ── TAB 5: CAESAR ───────────────────────
+    # ── TAB 5: BRUTE FORCE DEMO ─────────────
 
-    def _tab_caesar(self):
+    def _tab_bruteforce(self):
         tab = self._frame(self.nb)
-        self.nb.add(tab, text="  🔑  CAESAR  ")
+        self.nb.add(tab, text="  💀  BRUTE FORCE DEMO  ")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(1, weight=1)
 
-        c_in, b_in = self._card(tab, "► INPUT")
+        c_in, b_in = self._card(tab, "► PASSWORD STRENGTH ANALYZER")
         c_in.grid(row=0, column=0, sticky="ew", padx=16, pady=(16,8))
 
+        # password entry row
         row = tk.Frame(b_in, bg=BG3); row.pack(fill="x")
-        col1 = tk.Frame(row, bg=BG3); col1.pack(side="left", fill="x", expand=True, padx=(0,8))
-        col2 = tk.Frame(row, bg=BG3); col2.pack(side="left", padx=(0,8))
-        col3 = tk.Frame(row, bg=BG3); col3.pack(side="left")
+        col1 = tk.Frame(row, bg=BG3); col1.pack(side="left", fill="x", expand=True, padx=(0,12))
+        col2 = tk.Frame(row, bg=BG3); col2.pack(side="left")
 
-        self.cs_text = self._labeled_entry(col1, "TEXT  (any length)", width=40)
-        self.cs_text.insert(0, "Hello World")
+        self.bf_pw = self._labeled_entry(col1, "PASSWORD TO ANALYZE  (type your own or pick below)", width=40)
+        self.bf_pw.insert(0, "password")
 
-        tk.Label(col2, text="SHIFT  (1–25)", font=MONO_SM, bg=BG3, fg=FG_DIM,
+        tk.Label(col2, text="QUICK PRESETS", font=MONO_SM, bg=BG3, fg=FG_DIM,
                  anchor="w").pack(anchor="w", pady=(6,1))
-        self.cs_shift = tk.Spinbox(col2, from_=1, to=25, width=6, font=MONO, bg=BG,
-                                   fg=YELLOW, buttonbackground=BG3, relief="flat", bd=4)
-        self.cs_shift.pack(anchor="w", ipady=4)
-        self.cs_shift.delete(0, "end"); self.cs_shift.insert(0, "3")
+        preset_row1 = tk.Frame(col2, bg=BG3); preset_row1.pack(anchor="w")
+        preset_row2 = tk.Frame(col2, bg=BG3); preset_row2.pack(anchor="w", pady=(2,0))
 
-        tk.Label(col3, text="MODE", font=MONO_SM, bg=BG3, fg=FG_DIM,
-                 anchor="w").pack(anchor="w", pady=(6,1))
-        self.cs_mode = tk.StringVar(value="encrypt")
-        tk.Radiobutton(col3, text="Encrypt", variable=self.cs_mode, value="encrypt",
-                       font=MONO_SM, bg=BG3, fg=GREEN,
-                       selectcolor=BG, activebackground=BG3, bd=0).pack(anchor="w")
-        tk.Radiobutton(col3, text="Decrypt", variable=self.cs_mode, value="decrypt",
-                       font=MONO_SM, bg=BG3, fg=ACCENT,
-                       selectcolor=BG, activebackground=BG3, bd=0).pack(anchor="w")
+        weak_presets   = ["password", "123456", "qwerty", "abc123"]
+        strong_presets = ["MyS3cur3Pass!", "Tr0ub4dor&3", "X!9kLm#2vQ"]
+
+        for p in weak_presets:
+            self._btn(preset_row1, p,
+                      lambda pw=p: (self.bf_pw.delete(0,"end"), self.bf_pw.insert(0,pw)),
+                      color=RED).pack(side="left", padx=(0,4), pady=2)
+        for p in strong_presets:
+            self._btn(preset_row2, p,
+                      lambda pw=p: (self.bf_pw.delete(0,"end"), self.bf_pw.insert(0,pw)),
+                      color=ACCENT2).pack(side="left", padx=(0,4), pady=2)
+
+        # note
+        tk.Label(b_in,
+            text="  ⚙  Compares SHA-256 (10 billion/sec GPU) vs Argon2id (10/sec GPU)."
+                 "  Shows why memory-hard KDF is essential.",
+            font=MONO_SM, bg=BG3, fg=FG_DIM, anchor="w").pack(anchor="w", pady=(6,0))
 
         btn_row = tk.Frame(b_in, bg=BG3, pady=10); btn_row.pack(anchor="w")
-        self._btn(btn_row, "  ▶  RUN  ", self._do_caesar, color=YELLOW).pack(side="left", padx=(0,8))
-        self._btn(btn_row, "  🔓  BRUTE FORCE  ", self._do_caesar_brute, color=RED).pack(side="left", padx=(0,8))
-        self._btn(btn_row, "  ✕  CLEAR  ", self._clear_caesar, color=BG3).pack(side="left")
+        self._btn(btn_row, "  ▶  ANALYZE  ", self._do_bruteforce, color=YELLOW).pack(side="left", padx=(0,8))
+        self._btn(btn_row, "  📋  RUN ALL WEAK PASSWORDS  ", self._do_bruteforce_all, color=RED).pack(side="left", padx=(0,8))
+        self._btn(btn_row, "  ✕  CLEAR  ", self._clear_bruteforce, color=BG3).pack(side="left")
 
-        c_out, b_out = self._card(tab, "► OUTPUT", pady=8)
+        c_out, b_out = self._card(tab, "► ANALYSIS REPORT", pady=8)
         c_out.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0,16))
-        self.cs_out = self._output_box(b_out, height=16)
+        self.bf_out = self._output_box(b_out, height=16)
 
-        self.cs_status = tk.Label(tab, text="Ready.", font=MONO_SM, bg=BG, fg=FG_DIM,
+        self.bf_status = tk.Label(tab, text="Ready.", font=MONO_SM, bg=BG, fg=FG_DIM,
                                   anchor="w", padx=16)
-        self.cs_status.grid(row=2, column=0, sticky="ew")
+        self.bf_status.grid(row=2, column=0, sticky="ew")
 
-    def _do_caesar(self):
-        text = self.cs_text.get()
-        if not text:
-            self._status(self.cs_status, "⚠  Enter text.", RED); return
-        try:
-            shift = int(self.cs_shift.get())
-            if not 1 <= shift <= 25: raise ValueError
-        except ValueError:
-            self._status(self.cs_status, "⚠  Shift must be 1–25.", RED); return
+    def _rating_color_str(self, rating):
+        return {"CRITICAL":"⛔","WEAK":"⚠ ","MODERATE":"◈ ","STRONG":"✓ ","VERY STRONG":"✓✓","UNBREAKABLE":"🔒"}.get(rating,"  ")
 
-        mode   = self.cs_mode.get()
-        result = caesar_encrypt(text, shift) if mode == "encrypt" else caesar_decrypt(text, shift)
-        op     = "ENCRYPT" if mode == "encrypt" else "DECRYPT"
-        color  = GREEN if mode == "encrypt" else ACCENT
+    def _do_bruteforce(self):
+        pw = self.bf_pw.get()
+        if not pw:
+            self._status(self.bf_status, "⚠  Enter a password.", RED); return
 
-        trace = ["  CHAR  →  RESULT",
-                 "  " + "─"*40]
-        for o, r in zip(text, result):
-            if o.isalpha():
-                trace.append(f"    {o!r:5}  →  {r!r:5}  (+{shift} mod 26)")
-            else:
-                trace.append(f"    {o!r:5}  →  {r!r:5}  (unchanged)")
+        r = estimate_crack_time(pw)
+        sha_icon = self._rating_color_str(r["sha256_rating"])
+        arg_icon = self._rating_color_str(r["argon2_rating"])
+        slowdown = r["slowdown_factor"]
+
+        # strength bar (20 chars)
+        def bar(secs, max_log=20):
+            import math
+            if secs <= 0: return "░" * 20
+            filled = min(20, max(1, int(math.log10(max(secs,1)) / max_log * 20)))
+            return "█" * filled + "░" * (20 - filled)
+
+        sha_bar = bar(r["sha256_secs"])
+        arg_bar = bar(r["argon2_secs"])
 
         lines = [
             "╔══════════════════════════════════════════════════════════╗",
-            f"║               CAESAR CIPHER  {op:<26}║",
+            "║         BRUTE FORCE RESISTANCE ANALYSIS                 ║",
             "╚══════════════════════════════════════════════════════════╝",
             "",
-            f"  Input   :  {text}",
-            f"  Shift   :  {shift}",
-            f"  Output  :  {result}",
+            f"  Password          :  {'•' * len(pw)}  ({len(pw)} chars)",
+            f"  Charset size      :  {r['charset']} possible characters",
+            f"  Keyspace          :  {r['charset']}^{r['length']} = {r['keyspace']:.4e} combinations",
             "",
-            "  ── CHARACTER TRACE ──────────────────────────────────────",
-        ] + trace
-        self._write(self.cs_out, "\n".join(lines))
-        self._status(self.cs_status, f"✓  {op}: {result}", color)
-
-    def _do_caesar_brute(self):
-        text = self.cs_text.get()
-        if not text:
-            self._status(self.cs_status, "⚠  Enter text.", RED); return
-        results = caesar_brute_force(text)
-        lines = [
-            "╔══════════════════════════════════════════════════════════╗",
-            "║            CAESAR  BRUTE FORCE  (all 25 shifts)         ║",
-            "╚══════════════════════════════════════════════════════════╝",
+            "  ── ATTACK MODEL ─────────────────────────────────────────",
+            "  Assumption: attacker tests 50% of keyspace on average.",
+            "  SHA-256 rate  :  10,000,000,000 / sec  (GPU cluster, no KDF)",
+            "  Argon2id rate :              ~10 / sec  (t=2, m=64MB per hash)",
             "",
-            f"  Ciphertext :  {text}",
+            "  ── CRACKING TIME ────────────────────────────────────────",
+            f"  {sha_icon} SHA-256 (no KDF)  :  {r['sha256_str']:<20}  [{r['sha256_rating']}]",
+            f"     {sha_bar}",
             "",
-            "  SHIFT  PLAINTEXT CANDIDATE",
-            "  " + "─"*52,
+            f"  {arg_icon} Argon2id (XDES-A) :  {r['argon2_str']:<20}  [{r['argon2_rating']}]",
+            f"     {arg_bar}",
+            "",
+            f"  ── ARGON2ID ADVANTAGE ───────────────────────────────────",
+            f"  Slowdown factor   :  ×{slowdown:,.0f}",
+            f"  Meaning           :  Same attack takes {slowdown:,.0f}× longer with Argon2id.",
+            "",
+            "  ── CONCLUSION ───────────────────────────────────────────",
         ]
-        for s, c in results:
-            lines.append(f"  [{s:02d}]   {c}")
-        lines += ["", "  ↑ Scan for the readable line to find the correct shift."]
-        self._write(self.cs_out, "\n".join(lines))
-        self._status(self.cs_status, "✓  All 25 shifts shown.", YELLOW)
 
-    def _clear_caesar(self):
-        self.cs_text.delete(0, "end")
-        self._write(self.cs_out, "")
-        self._status(self.cs_status, "Cleared.")
+        if r["argon2_rating"] in ("STRONG", "VERY STRONG", "UNBREAKABLE"):
+            lines += [
+                f"  ✓  This password is RESISTANT under Argon2id.",
+                f"  ✓  Even if the hash is leaked, cracking is infeasible.",
+            ]
+        elif r["sha256_rating"] == "CRITICAL" and r["argon2_rating"] in ("WEAK","MODERATE"):
+            lines += [
+                f"  ⚠  SHA-256 alone: cracked instantly.",
+                f"  ◈  Argon2id buys significant time, but a longer password is better.",
+            ]
+        else:
+            lines += [
+                f"  ⛔  This password is WEAK even with Argon2id.",
+                f"  ⛔  Use a longer password with mixed characters.",
+            ]
+
+        lines += [
+            "",
+            "  → Try one of the strong presets above to see the difference.",
+        ]
+
+        self._write(self.bf_out, "\n".join(lines))
+        self._status(self.bf_status,
+            f"✓  SHA-256: {r['sha256_str']}  │  Argon2id: {r['argon2_str']}  │  Slowdown: ×{slowdown:,.0f}",
+            GREEN if r["argon2_rating"] in ("STRONG","VERY STRONG","UNBREAKABLE") else YELLOW)
+
+    def _do_bruteforce_all(self):
+        lines = [
+            "╔══════════════════════════════════════════════════════════╗",
+            "║       TOP 20 COMMON PASSWORDS — CRACK TIME COMPARISON   ║",
+            "╚══════════════════════════════════════════════════════════╝",
+            "",
+            f"  {'PASSWORD':<16}  {'LEN':>3}  {'SHA-256':<16}  {'ARGON2ID':<20}  SLOWDOWN",
+            "  " + "─"*72,
+        ]
+        for pw in WEAK_PASSWORDS:
+            r = estimate_crack_time(pw)
+            sha_icon = self._rating_color_str(r["sha256_rating"])
+            arg_icon = self._rating_color_str(r["argon2_rating"])
+            lines.append(
+                f"  {pw:<16}  {r['length']:>3}  "
+                f"{sha_icon}{r['sha256_str']:<14}  "
+                f"{arg_icon}{r['argon2_str']:<18}  "
+                f"×{r['slowdown_factor']:,.0f}"
+            )
+
+        lines += [
+            "",
+            "  ── KEY INSIGHT ──────────────────────────────────────────",
+            "  All these passwords are cracked in < 1 second with SHA-256.",
+            "  Argon2id's memory cost buys minutes to hours even for weak ones.",
+            "  BUT: the real fix is a strong password + Argon2id together.",
+            "  XDES-A uses Argon2id(t=2, m=64MB) so even leaked hashes resist attack.",
+        ]
+        self._write(self.bf_out, "\n".join(lines))
+        self._status(self.bf_status, "✓  All 20 common passwords analyzed.", YELLOW)
+
+    def _clear_bruteforce(self):
+        self.bf_pw.delete(0, "end")
+        self._write(self.bf_out, "")
+        self._status(self.bf_status, "Cleared.")
 
 
 # ─────────────────────────────────────────────
