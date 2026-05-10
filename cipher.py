@@ -61,7 +61,7 @@ S_BOXES = [
 # ─────────────────────────────────────────────
 #  DES BIT PRIMITIVES
 # ─────────────────────────────────────────────
-
+#DES Bit Primitives: bytes_to_bits, bits_to_bytes, permute, xor_bits, feistel
 def bytes_to_bits(b):
     bits = []
     for byte in b:
@@ -101,7 +101,7 @@ def feistel(R, K):
 # ─────────────────────────────────────────────
 #  STANDARD DES KEY SCHEDULE
 # ─────────────────────────────────────────────
-
+#Standard DES key schedule: des_key_schedule
 def des_key_schedule(key_8bytes: bytes) -> list:
     """
     Derive 16 DES round keys (each 48 bits) from a standard 8-byte / 64-bit key.
@@ -123,7 +123,7 @@ def des_key_schedule(key_8bytes: bytes) -> list:
 # ─────────────────────────────────────────────
 #  STANDARD DES BLOCK ENCRYPT (ECB, 64-bit)
 # ─────────────────────────────────────────────
-
+#  STANDARD DES BLOCK ENCRYPT (ECB, 64-bit)
 def des_encrypt_block(block_8: bytes, key_8: bytes) -> bytes:
     """
     Encrypt a single 8-byte block with standard DES (ECB, no padding).
@@ -148,7 +148,7 @@ def des_decrypt_block(block_8: bytes, key_8: bytes) -> bytes:
 # ─────────────────────────────────────────────
 #  XDES-A KEY DERIVATION  (Argon2id)
 # ─────────────────────────────────────────────
-
+#  XDES-A KEY DERIVATION  (Argon2id)
 KDF_TOTAL   = 8 + 112 + 8 + 24   # 152 bytes
 ARGON2_T    = 2
 ARGON2_M    = 65536
@@ -188,7 +188,7 @@ def derive_keys(password: bytes, salt: bytes) -> dict:
 # ─────────────────────────────────────────────
 #  XDES-A BLOCK CIPHER  (128-bit block)
 # ─────────────────────────────────────────────
-
+#  XDES-A BLOCK CIPHER  (128-bit block)
 def _xor_bytes(a: bytes, b: bytes) -> bytes:
     return bytes(x ^ y for x, y in zip(a, b))
 
@@ -233,7 +233,7 @@ def xdes_decrypt_block(block_16: bytes, keys: dict) -> bytes:
 # ─────────────────────────────────────────────
 #  CTR MODE
 # ─────────────────────────────────────────────
-
+#  CTR MODE
 def _ctr_keystream_block(nonce: bytes, counter: int, keys: dict) -> bytes:
     ctr_block = nonce[:8] + struct.pack(">Q", counter)
     return xdes_encrypt_block(ctr_block, keys)
@@ -249,7 +249,7 @@ def ctr_encrypt(plaintext: bytes, keys: dict, nonce: bytes) -> bytes:
 # ─────────────────────────────────────────────
 #  FULL XDES-A PIPELINE
 # ─────────────────────────────────────────────
-
+#  FULL XDES-A PIPELINE
 def xdes_a_encrypt(plaintext: bytes, password: bytes):
     argon_salt = os.urandom(16)
     nonce      = os.urandom(8)
@@ -348,33 +348,19 @@ def estimate_crack_time(password: str) -> dict:
     }
 
 # ─────────────────────────────────────────────
-#  LIVE BRUTE FORCE ENGINE
+#  LIVE BRUTE FORCE ENGINE  (CPU single-thread)
 # ─────────────────────────────────────────────
-#
-#  Brute-forces a SHORT password (1–4 chars from a limited charset)
-#  using either standard DES or XDES-A as the cipher under test.
-#
-#  Callback signature:
-#    on_attempt(attempt_num, candidate, elapsed_s, found)
-#    on_done(found, candidate, attempt_num, elapsed_s)
 
 import time
 import itertools
-import multiprocessing as mp
-from multiprocessing import Queue, Process
-import os
-import multiprocessing as mp
-from multiprocessing import Queue, Process
-import os
 
-BRUTE_CHARSET_ALPHA   = "abcdefghijklmnopqrstuvwxyz"
+BRUTE_CHARSET_ALPHA    = "abcdefghijklmnopqrstuvwxyz"
 BRUTE_CHARSET_ALPHANUM = "abcdefghijklmnopqrstuvwxyz0123456789"
-BRUTE_CHARSET_COMMON  = "abcdefghijklmnopqrstuvwxyz0123456789!@#"
+BRUTE_CHARSET_COMMON   = "abcdefghijklmnopqrstuvwxyz0123456789!@#"
 
 def _candidate_to_des_key(candidate: str) -> bytes:
     """Stretch/truncate a short candidate string to exactly 8 bytes for DES."""
     raw = candidate.encode("utf-8")
-    # repeat-pad to 8 bytes then truncate
     key = (raw * ((8 // len(raw)) + 1))[:8]
     return key
 
@@ -388,9 +374,8 @@ def brute_force_des(
     on_done,
 ):
     """
-    Brute-force standard DES.
+    Brute-force standard DES (single-threaded CPU).
     Encrypts known_pt with each candidate key and compares to target_ct.
-    target_ct is the first 8 bytes of DES-ECB encryption of known_pt with the real key.
     """
     attempt = 0
     start   = time.perf_counter()
@@ -428,7 +413,7 @@ def brute_force_xdes(
     on_done,
 ):
     """
-    Brute-force XDES-A.
+    Brute-force XDES-A (single-threaded CPU).
     For each candidate password, runs the full Argon2id KDF + block encrypt
     and compares the first 16 bytes of the encrypted block to target_ct.
     """
@@ -461,162 +446,85 @@ def brute_force_xdes(
     on_done(False, "", attempt, time.perf_counter() - start)
 
 
-def _gpu_worker_des(charset, target_ct, known_pt, length, queue, stop_event):
-    """GPU worker process for DES brute force (multiprocessing-based parallelism)."""
-    attempt_count = 0
-    for combo in itertools.product(charset, repeat=length):
-        if stop_event.is_set():
-            break
-        candidate = "".join(combo)
+# ─────────────────────────────────────────────
+#  GPU / MULTIPROCESSING BRUTE FORCE  (import from gpu_bruteforce.py)
+#
+#  ui.py imports these two names from cipher.py, so we re-export them here.
+#  gpu_bruteforce.py auto-detects CUDA and falls back to multiprocessing.
+# ─────────────────────────────────────────────
+
+try:
+    from gpu_bruteforce import brute_force_des_gpu, brute_force_xdes_gpu  # noqa: F401
+except ImportError:
+    # If gpu_bruteforce.py isn't present, provide plain multiprocessing stubs
+    # that match the same API so the UI never crashes.
+    import multiprocessing as _mp
+
+    def _des_mp_worker(args):
+        candidate, pt8, tct = args
+        from cipher import des_encrypt_block, _candidate_to_des_key
         key8 = _candidate_to_des_key(candidate)
-        ct = des_encrypt_block(known_pt[:8], key8)
-        attempt_count += 1
-        if attempt_count % 1000 == 0:
-            queue.put(("attempt", (candidate, attempt_count)))
-        if ct == target_ct:
-            queue.put(("found", candidate))
-            return
-    queue.put(("done", None))
+        return candidate, des_encrypt_block(pt8, key8) == tct
 
-
-def _gpu_worker_xdes(charset, target_ct, known_pt, argon_salt, length, queue, stop_event):
-    """GPU worker process for XDES brute force (multiprocessing-based parallelism)."""
-    attempt_count = 0
-    for combo in itertools.product(charset, repeat=length):
-        if stop_event.is_set():
-            break
-        candidate = "".join(combo)
-        pw_b = candidate.encode("utf-8")
-        keys = derive_keys(pw_b, argon_salt)
+    def _xdes_mp_worker(args):
+        candidate, known_pt, argon_salt, tct = args
+        from cipher import derive_keys, xdes_encrypt_block
+        keys = derive_keys(candidate.encode(), argon_salt)
         pt16 = (known_pt + bytes(16))[:16]
-        ct = xdes_encrypt_block(pt16, keys)
-        attempt_count += 1
-        if attempt_count % 1000 == 0:
-            queue.put(("attempt", (candidate, attempt_count)))
-        if ct == target_ct:
-            queue.put(("found", candidate))
-            return
-    queue.put(("done", None))
+        return candidate, xdes_encrypt_block(pt16, keys) == tct
 
+    def _mp_engine(worker_fn, items, target_ct, stop_event,
+                   on_attempt, on_done, num_workers):
+        attempt = 0
+        start   = time.perf_counter()
+        batch   = []
+        BATCH   = 512
 
-def brute_force_des_gpu(
-    target_ct: bytes,
-    known_pt: bytes,
-    max_len: int,
-    charset: str,
-    stop_event,
-    on_attempt,
-    on_done,
-    num_workers: int = 4,
-):
-    """GPU-accelerated DES brute force using multiprocessing."""
-    attempt = 0
-    start = time.perf_counter()
-    workers = []
-    queue = Queue()
-
-    try:
-        for length in range(1, max_len + 1):
-            for worker in workers:
-                if not worker.is_alive():
-                    worker.join()
-            workers = []
-
-            for _ in range(min(num_workers, len(charset))):
-                p = Process(
-                    target=_gpu_worker_des,
-                    args=(charset, target_ct, known_pt, length, queue, stop_event),
-                )
-                p.start()
-                workers.append(p)
-
-            done_count = 0
-            while done_count < len(workers):
+        with _mp.Pool(num_workers) as pool:
+            for item in items:
                 if stop_event.is_set():
-                    break
-                try:
-                    msg_type, data = queue.get(timeout=0.1)
-                    if msg_type == "found":
-                        on_done(True, data, attempt, time.perf_counter() - start)
-                        stop_event.set()
-                        return
-                    elif msg_type == "attempt":
-                        candidate, count = data
-                        attempt += count
-                        elapsed = time.perf_counter() - start
-                        on_attempt(attempt, candidate, elapsed, False)
-                    elif msg_type == "done":
-                        done_count += 1
-                except:
-                    pass
+                    pool.terminate()
+                    on_done(False, "", attempt, time.perf_counter() - start)
+                    return
+                batch.append(item)
+                if len(batch) >= BATCH:
+                    for candidate, found in pool.imap_unordered(worker_fn, batch):
+                        attempt += 1
+                        elapsed  = time.perf_counter() - start
+                        on_attempt(attempt, candidate, elapsed, found)
+                        if found:
+                            pool.terminate()
+                            on_done(True, candidate, attempt, elapsed)
+                            return
+                    batch = []
+            for candidate, found in pool.imap_unordered(worker_fn, batch):
+                attempt += 1
+                elapsed  = time.perf_counter() - start
+                on_attempt(attempt, candidate, elapsed, found)
+                if found:
+                    pool.terminate()
+                    on_done(True, candidate, attempt, elapsed)
+                    return
 
-        for worker in workers:
-            worker.join()
         on_done(False, "", attempt, time.perf_counter() - start)
-    except Exception as e:
-        for worker in workers:
-            if worker.is_alive():
-                worker.terminate()
-        raise e
 
+    def brute_force_des_gpu(target_ct, known_pt, max_len, charset,
+                            stop_event, on_attempt, on_done, num_workers=4):
+        pt8   = (known_pt[:8] + bytes(8))[:8]
+        items = (
+            ("".join(c), pt8, target_ct)
+            for ln in range(1, max_len + 1)
+            for c  in itertools.product(charset, repeat=ln)
+        )
+        _mp_engine(_des_mp_worker, items, target_ct,
+                   stop_event, on_attempt, on_done, num_workers)
 
-def brute_force_xdes_gpu(
-    target_ct: bytes,
-    known_pt: bytes,
-    argon_salt: bytes,
-    max_len: int,
-    charset: str,
-    stop_event,
-    on_attempt,
-    on_done,
-    num_workers: int = 4,
-):
-    """GPU-accelerated XDES brute force using multiprocessing."""
-    attempt = 0
-    start = time.perf_counter()
-    workers = []
-    queue = Queue()
-
-    try:
-        for length in range(1, max_len + 1):
-            for worker in workers:
-                if not worker.is_alive():
-                    worker.join()
-            workers = []
-
-            for _ in range(min(num_workers, len(charset))):
-                p = Process(
-                    target=_gpu_worker_xdes,
-                    args=(charset, target_ct, known_pt, argon_salt, length, queue, stop_event),
-                )
-                p.start()
-                workers.append(p)
-
-            done_count = 0
-            while done_count < len(workers):
-                if stop_event.is_set():
-                    break
-                try:
-                    msg_type, data = queue.get(timeout=0.1)
-                    if msg_type == "found":
-                        on_done(True, data, attempt, time.perf_counter() - start)
-                        stop_event.set()
-                        return
-                    elif msg_type == "attempt":
-                        candidate, count = data
-                        attempt += count
-                        elapsed = time.perf_counter() - start
-                        on_attempt(attempt, candidate, elapsed, False)
-                    elif msg_type == "done":
-                        done_count += 1
-                except:
-                    pass
-
-        for worker in workers:
-            worker.join()
-        on_done(False, "", attempt, time.perf_counter() - start)
-    except Exception as e:
-        for worker in workers:
-            if worker.is_alive():
-                worker.terminate()
-        raise e
+    def brute_force_xdes_gpu(target_ct, known_pt, argon_salt, max_len,
+                             charset, stop_event, on_attempt, on_done, num_workers=4):
+        items = (
+            ("".join(c), known_pt, argon_salt, target_ct)
+            for ln in range(1, max_len + 1)
+            for c  in itertools.product(charset, repeat=ln)
+        )
+        _mp_engine(_xdes_mp_worker, items, target_ct,
+                   stop_event, on_attempt, on_done, num_workers)
