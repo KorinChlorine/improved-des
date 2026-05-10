@@ -681,9 +681,8 @@ class XDESApp(tk.Tk):
 
         # Info banner
         info = (
-            "  ⚙  Encrypts a known plaintext with the chosen cipher, then actually brute-forces it\n"
-            "     candidate by candidate.  Watch Task Manager: XDES-A spikes RAM ~64 MB per attempt\n"
-            "     (Argon2id KDF), while standard DES uses negligible memory.  Keep the secret ≤ 3 chars."
+            "  ⚙  Encrypts a known plaintext and brute-forces it candidate by candidate.\n"
+            "     Standard DES is quick; XDES-A goes through the Argon2id path for each guess."
         )
         tk.Label(b_lbf, text=info, font=MONO_SM, bg=BG3, fg=YELLOW,
                  justify="left", anchor="w").pack(anchor="w", pady=(0,6))
@@ -699,7 +698,7 @@ class XDESApp(tk.Tk):
 
         self._lbf_cipher = tk.StringVar(value="xdes")
         des_rb = tk.Radiobutton(
-            cipher_col, text="Standard DES (fast, low RAM)",
+            cipher_col, text="Standard DES",
             variable=self._lbf_cipher, value="des",
             font=MONO_SM, bg=BG3, fg=ACCENT, selectcolor=BG,
             activebackground=BG3, activeforeground=ACCENT,
@@ -708,7 +707,7 @@ class XDESApp(tk.Tk):
         des_rb.pack(anchor="w", pady=2)
 
         xdes_rb = tk.Radiobutton(
-            cipher_col, text="XDES-A (Argon2id KDF — RAM spiker)",
+            cipher_col, text="XDES-A (Argon2id KDF)",
             variable=self._lbf_cipher, value="xdes",
             font=MONO_SM, bg=BG3, fg=GREEN, selectcolor=BG,
             activebackground=BG3, activeforeground=GREEN,
@@ -964,7 +963,7 @@ class XDESApp(tk.Tk):
         self._lbf_stop_btn.config(state="normal")
         self._status(self._lbf_status, f"⏳  Brute-forcing with {cipher_label}…  Open Task Manager!", YELLOW)
 
-        def on_attempt(attempt, candidate, elapsed, mem_mb, found):
+        def on_attempt(attempt, candidate, elapsed, found):
             # Throttle UI updates to every 50 attempts or on find
             if attempt % 50 != 0 and not found:
                 return
@@ -977,7 +976,7 @@ class XDESApp(tk.Tk):
 
             prefix = "  ✓  FOUND! " if found else "  ···  "
             line   = f"{prefix}[#{attempt:>6}]  trying: {candidate!r:<8}  " \
-                     f"elapsed: {elapsed:6.2f}s  mem: {mem_mb:6.1f}MB\n"
+                     f"elapsed: {elapsed:6.2f}s\n"
 
             self.after(0, lambda l=line: self._append(self._lbf_out, l))
             self.after(0, lambda: self._lbf_stat_attempt.config(text=f"Attempts: {attempt:,}"))
@@ -996,8 +995,6 @@ class XDESApp(tk.Tk):
                     f"  Attempts : {attempt:,}\n"
                     f"  Time     : {elapsed:.2f}s\n"
                     f"  Avg rate : {attempt/max(elapsed,0.001):,.0f} attempts/sec\n"
-                    f"\n"
-                    f"  {'DES note: trivial RAM, fast — no KDF protection.' if cipher == 'des' else 'XDES-A note: each attempt needed ~64MB Argon2id — see Task Manager!'}\n"
                 )
             else:
                 summary = (
@@ -1018,14 +1015,14 @@ class XDESApp(tk.Tk):
                     brute_force_des(
                         target_ct, pt_b[:8].ljust(8, b'\x00'),
                         max_len, charset,
-                        self._bf_stop_event, on_attempt, on_done
+                        self._bf_stop_event, on_attempt, on_done,
                     )
                 else:
                     brute_force_xdes(
                         target_ct, pt_b,
                         argon_salt,
                         max_len, charset,
-                        self._bf_stop_event, on_attempt, on_done
+                        self._bf_stop_event, on_attempt, on_done,
                     )
             except Exception as ex:
                 self.after(0, lambda: self._append(self._lbf_out, f"\n  ⚠  Error: {ex}\n"))

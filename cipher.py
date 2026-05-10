@@ -353,15 +353,12 @@ def estimate_crack_time(password: str) -> dict:
 #
 #  Brute-forces a SHORT password (1–4 chars from a limited charset)
 #  using either standard DES or XDES-A as the cipher under test.
-#  Designed for Task Manager showcase: XDES-A's Argon2id KDF will
-#  spike RAM to ~64 MB per attempt vs DES's negligible footprint.
 #
 #  Callback signature:
-#    on_attempt(attempt_num, candidate, elapsed_s, mem_mb, found)
-#    on_done(found, candidate, attempt_num, elapsed_s, peak_mem_mb)
+#    on_attempt(attempt_num, candidate, elapsed_s, found)
+#    on_done(found, candidate, attempt_num, elapsed_s)
 
 import time
-import tracemalloc
 import itertools
 
 BRUTE_CHARSET_ALPHA   = "abcdefghijklmnopqrstuvwxyz"
@@ -391,33 +388,27 @@ def brute_force_des(
     """
     attempt = 0
     start   = time.perf_counter()
-    tracemalloc.start()
 
-    try:
-        for length in range(1, max_len + 1):
-            for combo in itertools.product(charset, repeat=length):
-                if stop_event.is_set():
-                    on_done(False, "", attempt, time.perf_counter() - start,
-                            tracemalloc.get_traced_memory()[1] / 1e6)
-                    return
+    for length in range(1, max_len + 1):
+        for combo in itertools.product(charset, repeat=length):
+            if stop_event.is_set():
+                on_done(False, "", attempt, time.perf_counter() - start)
+                return
 
-                candidate = "".join(combo)
-                attempt  += 1
-                key8      = _candidate_to_des_key(candidate)
-                ct        = des_encrypt_block(known_pt[:8], key8)
-                elapsed   = time.perf_counter() - start
-                mem_mb    = tracemalloc.get_traced_memory()[1] / 1e6
+            candidate = "".join(combo)
+            attempt  += 1
+            key8      = _candidate_to_des_key(candidate)
+            ct        = des_encrypt_block(known_pt[:8], key8)
+            elapsed   = time.perf_counter() - start
 
-                found = (ct == target_ct)
-                on_attempt(attempt, candidate, elapsed, mem_mb, found)
+            found = (ct == target_ct)
+            on_attempt(attempt, candidate, elapsed, found)
 
-                if found:
-                    on_done(True, candidate, attempt, elapsed, mem_mb)
-                    return
-    finally:
-        tracemalloc.stop()
+            if found:
+                on_done(True, candidate, attempt, elapsed)
+                return
 
-    on_done(False, "", attempt, time.perf_counter() - start, 0.0)
+    on_done(False, "", attempt, time.perf_counter() - start)
 
 
 def brute_force_xdes(
@@ -434,38 +425,31 @@ def brute_force_xdes(
     Brute-force XDES-A.
     For each candidate password, runs the full Argon2id KDF + block encrypt
     and compares the first 16 bytes of the encrypted block to target_ct.
-    This is the expensive path — each attempt allocates ~64 MB for Argon2id.
     """
     attempt = 0
     start   = time.perf_counter()
-    tracemalloc.start()
 
-    try:
-        for length in range(1, max_len + 1):
-            for combo in itertools.product(charset, repeat=length):
-                if stop_event.is_set():
-                    on_done(False, "", attempt, time.perf_counter() - start,
-                            tracemalloc.get_traced_memory()[1] / 1e6)
-                    return
+    for length in range(1, max_len + 1):
+        for combo in itertools.product(charset, repeat=length):
+            if stop_event.is_set():
+                on_done(False, "", attempt, time.perf_counter() - start)
+                return
 
-                candidate = "".join(combo)
-                attempt  += 1
-                pw_b      = candidate.encode("utf-8")
+            candidate = "".join(combo)
+            attempt  += 1
+            pw_b      = candidate.encode("utf-8")
 
-                keys = derive_keys(pw_b, argon_salt)
-                pt16 = (known_pt + bytes(16))[:16]
-                ct   = xdes_encrypt_block(pt16, keys)
+            keys = derive_keys(pw_b, argon_salt)
+            pt16 = (known_pt + bytes(16))[:16]
+            ct   = xdes_encrypt_block(pt16, keys)
 
-                elapsed = time.perf_counter() - start
-                mem_mb  = tracemalloc.get_traced_memory()[1] / 1e6
+            elapsed = time.perf_counter() - start
+            found   = (ct == target_ct)
 
-                found = (ct == target_ct)
-                on_attempt(attempt, candidate, elapsed, mem_mb, found)
+            on_attempt(attempt, candidate, elapsed, found)
 
-                if found:
-                    on_done(True, candidate, attempt, elapsed, mem_mb)
-                    return
-    finally:
-        tracemalloc.stop()
+            if found:
+                on_done(True, candidate, attempt, elapsed)
+                return
 
-    on_done(False, "", attempt, time.perf_counter() - start, 0.0)
+    on_done(False, "", attempt, time.perf_counter() - start)
