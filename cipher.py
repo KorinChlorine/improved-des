@@ -360,6 +360,12 @@ def estimate_crack_time(password: str) -> dict:
 
 import time
 import itertools
+import multiprocessing as mp
+from multiprocessing import Queue, Process
+import os
+import multiprocessing as mp
+from multiprocessing import Queue, Process
+import os
 
 BRUTE_CHARSET_ALPHA   = "abcdefghijklmnopqrstuvwxyz"
 BRUTE_CHARSET_ALPHANUM = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -453,3 +459,164 @@ def brute_force_xdes(
                 return
 
     on_done(False, "", attempt, time.perf_counter() - start)
+
+
+def _gpu_worker_des(charset, target_ct, known_pt, length, queue, stop_event):
+    """GPU worker process for DES brute force (multiprocessing-based parallelism)."""
+    attempt_count = 0
+    for combo in itertools.product(charset, repeat=length):
+        if stop_event.is_set():
+            break
+        candidate = "".join(combo)
+        key8 = _candidate_to_des_key(candidate)
+        ct = des_encrypt_block(known_pt[:8], key8)
+        attempt_count += 1
+        if attempt_count % 1000 == 0:
+            queue.put(("attempt", (candidate, attempt_count)))
+        if ct == target_ct:
+            queue.put(("found", candidate))
+            return
+    queue.put(("done", None))
+
+
+def _gpu_worker_xdes(charset, target_ct, known_pt, argon_salt, length, queue, stop_event):
+    """GPU worker process for XDES brute force (multiprocessing-based parallelism)."""
+    attempt_count = 0
+    for combo in itertools.product(charset, repeat=length):
+        if stop_event.is_set():
+            break
+        candidate = "".join(combo)
+        pw_b = candidate.encode("utf-8")
+        keys = derive_keys(pw_b, argon_salt)
+        pt16 = (known_pt + bytes(16))[:16]
+        ct = xdes_encrypt_block(pt16, keys)
+        attempt_count += 1
+        if attempt_count % 1000 == 0:
+            queue.put(("attempt", (candidate, attempt_count)))
+        if ct == target_ct:
+            queue.put(("found", candidate))
+            return
+    queue.put(("done", None))
+
+
+def brute_force_des_gpu(
+    target_ct: bytes,
+    known_pt: bytes,
+    max_len: int,
+    charset: str,
+    stop_event,
+    on_attempt,
+    on_done,
+    num_workers: int = 4,
+):
+    """GPU-accelerated DES brute force using multiprocessing."""
+    attempt = 0
+    start = time.perf_counter()
+    workers = []
+    queue = Queue()
+
+    try:
+        for length in range(1, max_len + 1):
+            for worker in workers:
+                if not worker.is_alive():
+                    worker.join()
+            workers = []
+
+            for _ in range(min(num_workers, len(charset))):
+                p = Process(
+                    target=_gpu_worker_des,
+                    args=(charset, target_ct, known_pt, length, queue, stop_event),
+                )
+                p.start()
+                workers.append(p)
+
+            done_count = 0
+            while done_count < len(workers):
+                if stop_event.is_set():
+                    break
+                try:
+                    msg_type, data = queue.get(timeout=0.1)
+                    if msg_type == "found":
+                        on_done(True, data, attempt, time.perf_counter() - start)
+                        stop_event.set()
+                        return
+                    elif msg_type == "attempt":
+                        candidate, count = data
+                        attempt += count
+                        elapsed = time.perf_counter() - start
+                        on_attempt(attempt, candidate, elapsed, False)
+                    elif msg_type == "done":
+                        done_count += 1
+                except:
+                    pass
+
+        for worker in workers:
+            worker.join()
+        on_done(False, "", attempt, time.perf_counter() - start)
+    except Exception as e:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+        raise e
+
+
+def brute_force_xdes_gpu(
+    target_ct: bytes,
+    known_pt: bytes,
+    argon_salt: bytes,
+    max_len: int,
+    charset: str,
+    stop_event,
+    on_attempt,
+    on_done,
+    num_workers: int = 4,
+):
+    """GPU-accelerated XDES brute force using multiprocessing."""
+    attempt = 0
+    start = time.perf_counter()
+    workers = []
+    queue = Queue()
+
+    try:
+        for length in range(1, max_len + 1):
+            for worker in workers:
+                if not worker.is_alive():
+                    worker.join()
+            workers = []
+
+            for _ in range(min(num_workers, len(charset))):
+                p = Process(
+                    target=_gpu_worker_xdes,
+                    args=(charset, target_ct, known_pt, argon_salt, length, queue, stop_event),
+                )
+                p.start()
+                workers.append(p)
+
+            done_count = 0
+            while done_count < len(workers):
+                if stop_event.is_set():
+                    break
+                try:
+                    msg_type, data = queue.get(timeout=0.1)
+                    if msg_type == "found":
+                        on_done(True, data, attempt, time.perf_counter() - start)
+                        stop_event.set()
+                        return
+                    elif msg_type == "attempt":
+                        candidate, count = data
+                        attempt += count
+                        elapsed = time.perf_counter() - start
+                        on_attempt(attempt, candidate, elapsed, False)
+                    elif msg_type == "done":
+                        done_count += 1
+                except:
+                    pass
+
+        for worker in workers:
+            worker.join()
+        on_done(False, "", attempt, time.perf_counter() - start)
+    except Exception as e:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+        raise e

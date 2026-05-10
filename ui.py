@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 import threading
 import time
+import multiprocessing as mp
 
 from cipher import (
     xdes_a_encrypt, xdes_a_decrypt, avalanche_analysis,
@@ -16,6 +17,7 @@ from cipher import (
     # brute force
     des_encrypt_block, _candidate_to_des_key, xdes_encrypt_block,
     brute_force_des, brute_force_xdes,
+    brute_force_des_gpu, brute_force_xdes_gpu,
     BRUTE_CHARSET_ALPHA, BRUTE_CHARSET_ALPHANUM, BRUTE_CHARSET_COMMON,
 )
 
@@ -23,18 +25,18 @@ from cipher import (
 #  COLOR PALETTE  (dark terminal)
 # ─────────────────────────────────────────────
 
-BG      = "#0d0f14"
-BG2     = "#13161d"
-BG3     = "#1a1e28"
-BORDER  = "#252a38"
-ACCENT  = "#00e5ff"
-ACCENT2 = "#7c3aed"
-GREEN   = "#00ff9d"
-YELLOW  = "#ffd600"
-RED     = "#ff3d71"
-ORANGE  = "#ff8c00"
-FG      = "#cdd6f4"
-FG_DIM  = "#6c7086"
+BG      = "#000000"
+BG2     = "#0a0e27"
+BG3     = "#0f1419"
+BORDER  = "#1a1f2e"
+ACCENT  = "#00ff41"
+ACCENT2 = "#ff0080"
+GREEN   = "#39ff14"
+YELLOW  = "#ffff00"
+RED     = "#ff0055"
+ORANGE  = "#ff6600"
+FG      = "#00ff41"
+FG_DIM  = "#00aa00"
 MONO    = ("Courier New", 10)
 MONO_SM = ("Courier New", 9)
 MONO_LG = ("Courier New", 12, "bold")
@@ -51,7 +53,7 @@ class XDESApp(tk.Tk):
         self.minsize(900, 660)
         self.configure(bg=BG)
         self.resizable(True, True)
-        self._bf_stop_event = threading.Event()
+        self._bf_stop_event = mp.Event()
         self._bf_running    = False
         self._build_ui()
 
@@ -698,7 +700,7 @@ class XDESApp(tk.Tk):
 
         self._lbf_cipher = tk.StringVar(value="xdes")
         des_rb = tk.Radiobutton(
-            cipher_col, text="Standard DES",
+            cipher_col, text="DES [CPU]",
             variable=self._lbf_cipher, value="des",
             font=MONO_SM, bg=BG3, fg=ACCENT, selectcolor=BG,
             activebackground=BG3, activeforeground=ACCENT,
@@ -707,7 +709,7 @@ class XDESApp(tk.Tk):
         des_rb.pack(anchor="w", pady=2)
 
         xdes_rb = tk.Radiobutton(
-            cipher_col, text="XDES-A (Argon2id KDF)",
+            cipher_col, text="XDES [GPU]",
             variable=self._lbf_cipher, value="xdes",
             font=MONO_SM, bg=BG3, fg=GREEN, selectcolor=BG,
             activebackground=BG3, activeforeground=GREEN,
@@ -724,9 +726,9 @@ class XDESApp(tk.Tk):
         self._lbf_pt.insert(0, "HELLO")
         self._lbf_pt.pack(fill="x", ipady=4)
 
-        # Secret (what the attacker is trying to find)
+        # Secret (what the attacker is trying to find) — VISIBLE
         sec_col = tk.Frame(cfg_row, bg=BG3); sec_col.pack(side="left", fill="x", expand=True)
-        tk.Label(sec_col, text="SECRET TO FIND  (max 3 chars — the 'real' password)",
+        tk.Label(sec_col, text="SECRET PASSWORD  (visible  |  max 3 chars)",
                  font=MONO_SM, bg=BG3, fg=FG_DIM, anchor="w").pack(anchor="w")
         self._lbf_secret = tk.Entry(sec_col, font=MONO, bg=BG, fg=RED, insertbackground=RED,
                                     relief="flat", bd=6, width=16)
@@ -753,6 +755,14 @@ class XDESApp(tk.Tk):
                            font=MONO_SM, bg=BG3, fg=FG, selectcolor=BG,
                            activebackground=BG3, activeforeground=FG,
                            relief="flat", bd=0).pack(anchor="w")
+
+        gpu_col = tk.Frame(cfg2_row, bg=BG3); gpu_col.pack(side="left")
+        tk.Label(gpu_col, text="ACCELERATION", font=MONO_SM, bg=BG3, fg=FG_DIM).pack(anchor="w")
+        self._lbf_use_gpu = tk.BooleanVar(value=True)
+        tk.Checkbutton(gpu_col, text="Enable GPU (4 workers)", variable=self._lbf_use_gpu,
+                       font=MONO_SM, bg=BG3, fg=GREEN, selectcolor=BG,
+                       activebackground=BG3, activeforeground=GREEN,
+                       relief="flat", bd=0).pack(anchor="w")
 
         # Buttons
         lbf_btn_row = tk.Frame(b_lbf, bg=BG3, pady=8); lbf_btn_row.pack(anchor="w")
@@ -936,10 +946,11 @@ class XDESApp(tk.Tk):
             target_ct  = xdes_encrypt_block(pt16, keys)
 
         cipher_label = "Standard DES" if cipher == "des" else "XDES-A (Argon2id)"
+        accel_label = "[GPU]" if self._lbf_use_gpu.get() else "[CPU]"
 
         header = [
             "╔══════════════════════════════════════════════════════════╗",
-            f"║  LIVE BRUTE FORCE  —  {cipher_label:<34}║",
+            f"║  LIVE BRUTE FORCE  —  {cipher_label:<22} {accel_label:<10}║",
             "╚══════════════════════════════════════════════════════════╝",
             "",
             f"  Known plaintext  :  {pt_str!r}",
@@ -961,7 +972,8 @@ class XDESApp(tk.Tk):
         self._bf_stop_event.clear()
         self._lbf_start_btn.config(state="disabled")
         self._lbf_stop_btn.config(state="normal")
-        self._status(self._lbf_status, f"⏳  Brute-forcing with {cipher_label}…  Open Task Manager!", YELLOW)
+        gpu_status = "GPU ACCELERATED" if self._lbf_use_gpu.get() else "CPU SINGLE-THREAD"
+        self._status(self._lbf_status, f"⏳  [{gpu_status}] Cracking...  ", YELLOW)
 
         def on_attempt(attempt, candidate, elapsed, found):
             # Throttle UI updates to every 50 attempts or on find
@@ -1011,19 +1023,35 @@ class XDESApp(tk.Tk):
 
         def run():
             try:
+                use_gpu = self._lbf_use_gpu.get()
                 if cipher == "des":
-                    brute_force_des(
-                        target_ct, pt_b[:8].ljust(8, b'\x00'),
-                        max_len, charset,
-                        self._bf_stop_event, on_attempt, on_done,
-                    )
+                    if use_gpu:
+                        brute_force_des_gpu(
+                            target_ct, pt_b[:8].ljust(8, b'\x00'),
+                            max_len, charset,
+                            self._bf_stop_event, on_attempt, on_done, num_workers=4
+                        )
+                    else:
+                        brute_force_des(
+                            target_ct, pt_b[:8].ljust(8, b'\x00'),
+                            max_len, charset,
+                            self._bf_stop_event, on_attempt, on_done,
+                        )
                 else:
-                    brute_force_xdes(
-                        target_ct, pt_b,
-                        argon_salt,
-                        max_len, charset,
-                        self._bf_stop_event, on_attempt, on_done,
-                    )
+                    if use_gpu:
+                        brute_force_xdes_gpu(
+                            target_ct, pt_b,
+                            argon_salt,
+                            max_len, charset,
+                            self._bf_stop_event, on_attempt, on_done, num_workers=4
+                        )
+                    else:
+                        brute_force_xdes(
+                            target_ct, pt_b,
+                            argon_salt,
+                            max_len, charset,
+                            self._bf_stop_event, on_attempt, on_done,
+                        )
             except Exception as ex:
                 self.after(0, lambda: self._append(self._lbf_out, f"\n  ⚠  Error: {ex}\n"))
                 self.after(0, self._bf_reset_buttons)
