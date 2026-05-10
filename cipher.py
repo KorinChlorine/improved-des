@@ -8,6 +8,8 @@ import os
 import hmac
 import hashlib
 import struct
+import time
+import itertools
 from argon2.low_level import hash_secret_raw, Type
 
 # ─────────────────────────────────────────────
@@ -61,7 +63,7 @@ S_BOXES = [
 # ─────────────────────────────────────────────
 #  DES BIT PRIMITIVES
 # ─────────────────────────────────────────────
-#DES Bit Primitives: bytes_to_bits, bits_to_bytes, permute, xor_bits, feistel
+
 def bytes_to_bits(b):
     bits = []
     for byte in b:
@@ -85,7 +87,6 @@ def xor_bits(a, b):
     return [x ^ y for x, y in zip(a, b)]
 
 def feistel(R, K):
-    """Standard DES Feistel function."""
     expanded = permute(R, E)
     xored = xor_bits(expanded, K)
     sbox_out = []
@@ -101,12 +102,8 @@ def feistel(R, K):
 # ─────────────────────────────────────────────
 #  STANDARD DES KEY SCHEDULE
 # ─────────────────────────────────────────────
-#Standard DES key schedule: des_key_schedule
+
 def des_key_schedule(key_8bytes: bytes) -> list:
-    """
-    Derive 16 DES round keys (each 48 bits) from a standard 8-byte / 64-bit key.
-    Uses the real DES PC1 + shift + PC2 schedule.
-    """
     key_bits = bytes_to_bits(key_8bytes)
     C = [key_bits[b - 1] for b in PC1_C]
     D = [key_bits[b - 1] for b in PC1_D]
@@ -115,20 +112,15 @@ def des_key_schedule(key_8bytes: bytes) -> list:
         C = C[shift:] + C[:shift]
         D = D[shift:] + D[:shift]
         CD = C + D
-        # PC2 indexes into a 56-bit CD array
         k48 = [CD[b - 1] for b in PC2]
         round_keys.append(k48)
     return round_keys
 
 # ─────────────────────────────────────────────
-#  STANDARD DES BLOCK ENCRYPT (ECB, 64-bit)
+#  STANDARD DES BLOCK ENCRYPT/DECRYPT
 # ─────────────────────────────────────────────
-#  STANDARD DES BLOCK ENCRYPT (ECB, 64-bit)
+
 def des_encrypt_block(block_8: bytes, key_8: bytes) -> bytes:
-    """
-    Encrypt a single 8-byte block with standard DES (ECB, no padding).
-    key_8 must be exactly 8 bytes (64 bits, parity bits ignored).
-    """
     round_keys = des_key_schedule(key_8)
     bits = permute(bytes_to_bits(block_8), IP)
     L, R = bits[:32], bits[32:]
@@ -137,7 +129,6 @@ def des_encrypt_block(block_8: bytes, key_8: bytes) -> bytes:
     return bits_to_bytes(permute(R + L, IP_INV))
 
 def des_decrypt_block(block_8: bytes, key_8: bytes) -> bytes:
-    """Decrypt a single 8-byte DES block."""
     round_keys = list(reversed(des_key_schedule(key_8)))
     bits = permute(bytes_to_bits(block_8), IP)
     L, R = bits[:32], bits[32:]
@@ -148,11 +139,11 @@ def des_decrypt_block(block_8: bytes, key_8: bytes) -> bytes:
 # ─────────────────────────────────────────────
 #  XDES-A KEY DERIVATION  (Argon2id)
 # ─────────────────────────────────────────────
-#  XDES-A KEY DERIVATION  (Argon2id)
-KDF_TOTAL   = 8 + 112 + 8 + 24   # 152 bytes
-ARGON2_T    = 2
-ARGON2_M    = 65536
-ARGON2_P    = 1
+
+KDF_TOTAL  = 8 + 112 + 8 + 24   # 152 bytes
+ARGON2_T   = 2
+ARGON2_M   = 65536
+ARGON2_P   = 1
 
 def derive_keys(password: bytes, salt: bytes) -> dict:
     raw = hash_secret_raw(
@@ -188,7 +179,7 @@ def derive_keys(password: bytes, salt: bytes) -> dict:
 # ─────────────────────────────────────────────
 #  XDES-A BLOCK CIPHER  (128-bit block)
 # ─────────────────────────────────────────────
-#  XDES-A BLOCK CIPHER  (128-bit block)
+
 def _xor_bytes(a: bytes, b: bytes) -> bytes:
     return bytes(x ^ y for x, y in zip(a, b))
 
@@ -233,7 +224,7 @@ def xdes_decrypt_block(block_16: bytes, keys: dict) -> bytes:
 # ─────────────────────────────────────────────
 #  CTR MODE
 # ─────────────────────────────────────────────
-#  CTR MODE
+
 def _ctr_keystream_block(nonce: bytes, counter: int, keys: dict) -> bytes:
     ctr_block = nonce[:8] + struct.pack(">Q", counter)
     return xdes_encrypt_block(ctr_block, keys)
@@ -249,7 +240,7 @@ def ctr_encrypt(plaintext: bytes, keys: dict, nonce: bytes) -> bytes:
 # ─────────────────────────────────────────────
 #  FULL XDES-A PIPELINE
 # ─────────────────────────────────────────────
-#  FULL XDES-A PIPELINE
+
 def xdes_a_encrypt(plaintext: bytes, password: bytes):
     argon_salt = os.urandom(16)
     nonce      = os.urandom(8)
@@ -278,8 +269,8 @@ def xdes_a_decrypt(packet: bytes, password: bytes):
 # ─────────────────────────────────────────────
 
 def avalanche_analysis(plaintext: bytes, password: bytes):
-    pt   = (plaintext + bytes(16))[:16]
-    keys = derive_keys(password, bytes(16))
+    pt      = (plaintext + bytes(16))[:16]
+    keys    = derive_keys(password, bytes(16))
     base_ct = xdes_encrypt_block(pt, keys)
     results = []
     for bit_pos in range(128):
@@ -312,27 +303,27 @@ def estimate_crack_time(password: str) -> dict:
     if any(not c.isalnum() for c in password): charset += 32
     charset = max(charset, 1)
 
-    keyspace      = charset ** len(password)
-    SHA256_RATE   = 10_000_000_000
-    ARGON2_RATE   = 10
+    keyspace    = charset ** len(password)
+    SHA256_RATE = 10_000_000_000
+    ARGON2_RATE = 10
 
-    sha_secs  = keyspace / 2 / SHA256_RATE
-    arg_secs  = keyspace / 2 / ARGON2_RATE
+    sha_secs = keyspace / 2 / SHA256_RATE
+    arg_secs = keyspace / 2 / ARGON2_RATE
 
     def fmt(secs):
-        if secs < 1:         return "< 1 second",       "CRITICAL"
-        if secs < 60:        return f"{secs:.1f}s",      "CRITICAL"
-        if secs < 3600:      return f"{secs/60:.1f} min","WEAK"
-        if secs < 86400:     return f"{secs/3600:.1f} hr","WEAK"
-        if secs < 2592000:   return f"{secs/86400:.1f} days","MODERATE"
-        if secs < 31536000:  return f"{secs/2592000:.1f} mo","STRONG"
+        if secs < 1:        return "< 1 second",      "CRITICAL"
+        if secs < 60:       return f"{secs:.1f}s",     "CRITICAL"
+        if secs < 3600:     return f"{secs/60:.1f} min","WEAK"
+        if secs < 86400:    return f"{secs/3600:.1f} hr","WEAK"
+        if secs < 2592000:  return f"{secs/86400:.1f} days","MODERATE"
+        if secs < 31536000: return f"{secs/2592000:.1f} mo","STRONG"
         y = secs / 31536000
-        if y < 1e6:          return f"{y:,.0f} yrs",    "STRONG"
-        if y < 1e12:         return f"{y:.2e} yrs",     "VERY STRONG"
+        if y < 1e6:  return f"{y:,.0f} yrs",  "STRONG"
+        if y < 1e12: return f"{y:.2e} yrs",   "VERY STRONG"
         return f"{y:.2e} yrs", "UNBREAKABLE"
 
-    sha_str,  sha_rating = fmt(sha_secs)
-    arg_str,  arg_rating = fmt(arg_secs)
+    sha_str, sha_rating = fmt(sha_secs)
+    arg_str, arg_rating = fmt(arg_secs)
 
     return {
         "length":          len(password),
@@ -348,183 +339,150 @@ def estimate_crack_time(password: str) -> dict:
     }
 
 # ─────────────────────────────────────────────
-#  LIVE BRUTE FORCE ENGINE  (CPU single-thread)
+#  LIVE BRUTE FORCE ENGINE  (multiprocessing)
 # ─────────────────────────────────────────────
 
-import time
-import itertools
+import multiprocessing as mp
 
 BRUTE_CHARSET_ALPHA    = "abcdefghijklmnopqrstuvwxyz"
 BRUTE_CHARSET_ALPHANUM = "abcdefghijklmnopqrstuvwxyz0123456789"
 BRUTE_CHARSET_COMMON   = "abcdefghijklmnopqrstuvwxyz0123456789!@#"
+BRUTE_CHARSET_FULL     = (
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789!@#$%^&*()-_=+[]{}|;:',.<>?/`~"
+)
 
 def _candidate_to_des_key(candidate: str) -> bytes:
-    """Stretch/truncate a short candidate string to exactly 8 bytes for DES."""
     raw = candidate.encode("utf-8")
-    key = (raw * ((8 // len(raw)) + 1))[:8]
-    return key
+    return (raw * ((8 // len(raw)) + 1))[:8]
+
+
+# ── DES worker (runs in subprocess) ──────────────────────────────────────────
+
+def _des_worker_batch(args):
+    """Encrypt a batch of candidates, return first match or None."""
+    candidates, known_pt8, target_ct = args
+    for candidate in candidates:
+        key8 = _candidate_to_des_key(candidate)
+        ct   = des_encrypt_block(known_pt8, key8)
+        if ct == target_ct:
+            return candidate
+    return None
+
+
+# ── XDES worker (runs in subprocess) ─────────────────────────────────────────
+
+def _xdes_worker_batch(args):
+    """Derive keys and encrypt a batch of candidates, return first match or None."""
+    candidates, known_pt16, argon_salt, target_ct = args
+    for candidate in candidates:
+        keys = derive_keys(candidate.encode("utf-8"), argon_salt)
+        ct   = xdes_encrypt_block(known_pt16, keys)
+        if ct == target_ct:
+            return candidate
+    return None
+
+
+# ── Batch generator ───────────────────────────────────────────────────────────
+
+def _generate_batches(charset, max_len, batch_size):
+    """Yield (batch_index, [candidate, ...]) tuples."""
+    batch = []
+    idx   = 0
+    for length in range(1, max_len + 1):
+        for combo in itertools.product(charset, repeat=length):
+            batch.append("".join(combo))
+            if len(batch) >= batch_size:
+                yield idx, batch
+                idx  += len(batch)
+                batch = []
+    if batch:
+        yield idx, batch
+
+
+# ── DES brute force ───────────────────────────────────────────────────────────
 
 def brute_force_des(
     target_ct: bytes,
-    known_pt: bytes,
-    max_len: int,
-    charset: str,
+    known_pt:  bytes,
+    max_len:   int,
+    charset:   str,
     stop_event,
     on_attempt,
     on_done,
 ):
-    """
-    Brute-force standard DES (single-threaded CPU).
-    Encrypts known_pt with each candidate key and compares to target_ct.
-    """
-    attempt = 0
-    start   = time.perf_counter()
+    pt8        = known_pt[:8].ljust(8, b'\x00')
+    n_workers  = max(1, mp.cpu_count())
+    # DES is fast — large batches keep workers fed
+    batch_size = max(500, n_workers * 200)
+    attempt    = 0
+    start      = time.perf_counter()
 
-    for length in range(1, max_len + 1):
-        for combo in itertools.product(charset, repeat=length):
+    with mp.Pool(n_workers) as pool:
+        for base_idx, batch in _generate_batches(charset, max_len, batch_size):
             if stop_event.is_set():
+                pool.terminate()
                 on_done(False, "", attempt, time.perf_counter() - start)
                 return
 
-            candidate = "".join(combo)
-            attempt  += 1
-            key8      = _candidate_to_des_key(candidate)
-            ct        = des_encrypt_block(known_pt[:8], key8)
-            elapsed   = time.perf_counter() - start
+            # Split batch evenly across workers
+            chunk_size = max(1, len(batch) // n_workers)
+            chunks     = [batch[i:i+chunk_size]
+                          for i in range(0, len(batch), chunk_size)]
+            work       = [(c, pt8, target_ct) for c in chunks]
 
-            found = (ct == target_ct)
-            on_attempt(attempt, candidate, elapsed, found)
-
-            if found:
-                on_done(True, candidate, attempt, elapsed)
-                return
+            for result in pool.imap_unordered(_des_worker_batch, work):
+                attempt += len(batch) // len(chunks)
+                elapsed  = time.perf_counter() - start
+                if result is not None:
+                    on_attempt(attempt, result, elapsed, True)
+                    pool.terminate()
+                    on_done(True, result, attempt, elapsed)
+                    return
+                on_attempt(attempt, batch[min(attempt-1, len(batch)-1)], elapsed, False)
 
     on_done(False, "", attempt, time.perf_counter() - start)
 
+
+# ── XDES brute force ──────────────────────────────────────────────────────────
 
 def brute_force_xdes(
-    target_ct: bytes,
-    known_pt: bytes,
+    target_ct:  bytes,
+    known_pt:   bytes,
     argon_salt: bytes,
-    max_len: int,
-    charset: str,
+    max_len:    int,
+    charset:    str,
     stop_event,
     on_attempt,
     on_done,
 ):
-    """
-    Brute-force XDES-A (single-threaded CPU).
-    For each candidate password, runs the full Argon2id KDF + block encrypt
-    and compares the first 16 bytes of the encrypted block to target_ct.
-    """
-    attempt = 0
-    start   = time.perf_counter()
+    pt16       = (known_pt + bytes(16))[:16]
+    n_workers  = max(1, mp.cpu_count())
+    # Argon2id is expensive — small batches so workers stay busy without lag
+    batch_size = max(n_workers, n_workers * 2)
+    attempt    = 0
+    start      = time.perf_counter()
 
-    for length in range(1, max_len + 1):
-        for combo in itertools.product(charset, repeat=length):
+    with mp.Pool(n_workers) as pool:
+        for base_idx, batch in _generate_batches(charset, max_len, batch_size):
             if stop_event.is_set():
+                pool.terminate()
                 on_done(False, "", attempt, time.perf_counter() - start)
                 return
 
-            candidate = "".join(combo)
-            attempt  += 1
-            pw_b      = candidate.encode("utf-8")
+            chunk_size = max(1, len(batch) // n_workers)
+            chunks     = [batch[i:i+chunk_size]
+                          for i in range(0, len(batch), chunk_size)]
+            work       = [(c, pt16, argon_salt, target_ct) for c in chunks]
 
-            keys = derive_keys(pw_b, argon_salt)
-            pt16 = (known_pt + bytes(16))[:16]
-            ct   = xdes_encrypt_block(pt16, keys)
-
-            elapsed = time.perf_counter() - start
-            found   = (ct == target_ct)
-
-            on_attempt(attempt, candidate, elapsed, found)
-
-            if found:
-                on_done(True, candidate, attempt, elapsed)
-                return
+            for result in pool.imap_unordered(_xdes_worker_batch, work):
+                attempt += max(1, len(batch) // len(chunks))
+                elapsed  = time.perf_counter() - start
+                if result is not None:
+                    on_attempt(attempt, result, elapsed, True)
+                    pool.terminate()
+                    on_done(True, result, attempt, elapsed)
+                    return
+                on_attempt(attempt, batch[min(attempt-1, len(batch)-1)], elapsed, False)
 
     on_done(False, "", attempt, time.perf_counter() - start)
-
-
-# ─────────────────────────────────────────────
-#  GPU / MULTIPROCESSING BRUTE FORCE  (import from gpu_bruteforce.py)
-#
-#  ui.py imports these two names from cipher.py, so we re-export them here.
-#  gpu_bruteforce.py auto-detects CUDA and falls back to multiprocessing.
-# ─────────────────────────────────────────────
-
-try:
-    from gpu_bruteforce import brute_force_des_gpu, brute_force_xdes_gpu  # noqa: F401
-except ImportError:
-    # If gpu_bruteforce.py isn't present, provide plain multiprocessing stubs
-    # that match the same API so the UI never crashes.
-    import multiprocessing as _mp
-
-    def _des_mp_worker(args):
-        candidate, pt8, tct = args
-        from cipher import des_encrypt_block, _candidate_to_des_key
-        key8 = _candidate_to_des_key(candidate)
-        return candidate, des_encrypt_block(pt8, key8) == tct
-
-    def _xdes_mp_worker(args):
-        candidate, known_pt, argon_salt, tct = args
-        from cipher import derive_keys, xdes_encrypt_block
-        keys = derive_keys(candidate.encode(), argon_salt)
-        pt16 = (known_pt + bytes(16))[:16]
-        return candidate, xdes_encrypt_block(pt16, keys) == tct
-
-    def _mp_engine(worker_fn, items, target_ct, stop_event,
-                   on_attempt, on_done, num_workers):
-        attempt = 0
-        start   = time.perf_counter()
-        batch   = []
-        BATCH   = 512
-
-        with _mp.Pool(num_workers) as pool:
-            for item in items:
-                if stop_event.is_set():
-                    pool.terminate()
-                    on_done(False, "", attempt, time.perf_counter() - start)
-                    return
-                batch.append(item)
-                if len(batch) >= BATCH:
-                    for candidate, found in pool.imap_unordered(worker_fn, batch):
-                        attempt += 1
-                        elapsed  = time.perf_counter() - start
-                        on_attempt(attempt, candidate, elapsed, found)
-                        if found:
-                            pool.terminate()
-                            on_done(True, candidate, attempt, elapsed)
-                            return
-                    batch = []
-            for candidate, found in pool.imap_unordered(worker_fn, batch):
-                attempt += 1
-                elapsed  = time.perf_counter() - start
-                on_attempt(attempt, candidate, elapsed, found)
-                if found:
-                    pool.terminate()
-                    on_done(True, candidate, attempt, elapsed)
-                    return
-
-        on_done(False, "", attempt, time.perf_counter() - start)
-
-    def brute_force_des_gpu(target_ct, known_pt, max_len, charset,
-                            stop_event, on_attempt, on_done, num_workers=4):
-        pt8   = (known_pt[:8] + bytes(8))[:8]
-        items = (
-            ("".join(c), pt8, target_ct)
-            for ln in range(1, max_len + 1)
-            for c  in itertools.product(charset, repeat=ln)
-        )
-        _mp_engine(_des_mp_worker, items, target_ct,
-                   stop_event, on_attempt, on_done, num_workers)
-
-    def brute_force_xdes_gpu(target_ct, known_pt, argon_salt, max_len,
-                             charset, stop_event, on_attempt, on_done, num_workers=4):
-        items = (
-            ("".join(c), known_pt, argon_salt, target_ct)
-            for ln in range(1, max_len + 1)
-            for c  in itertools.product(charset, repeat=ln)
-        )
-        _mp_engine(_xdes_mp_worker, items, target_ct,
-                   stop_event, on_attempt, on_done, num_workers)
