@@ -273,6 +273,7 @@ def avalanche_analysis(plaintext: bytes, password: bytes):
     keys    = derive_keys(password, bytes(16))
     base_ct = xdes_encrypt_block(pt, keys)
     results = []
+    iterations = []
     for bit_pos in range(128):
         byte_idx = bit_pos // 8
         bit_idx  = 7 - (bit_pos % 8)
@@ -281,8 +282,14 @@ def avalanche_analysis(plaintext: bytes, password: bytes):
         fc   = xdes_encrypt_block(bytes(flipped), keys)
         diff = sum(bin(x ^ y).count('1') for x, y in zip(base_ct, fc))
         results.append(diff)
+        iterations.append({
+            "bit": bit_pos,
+            "diff": diff,
+            "ct_hex": fc.hex(),
+            "xor_hex": bytes(x ^ y for x, y in zip(base_ct, fc)).hex(),
+        })
     avg = sum(results) / 128
-    return avg, (avg / 128) * 100, results
+    return avg, (avg / 128) * 100, results, iterations
 
 # ─────────────────────────────────────────────
 #  BRUTE FORCE HELPERS

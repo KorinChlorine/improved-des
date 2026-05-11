@@ -489,10 +489,19 @@ class XDESApp(tk.Tk):
         br = tk.Frame(b, bg=PANEL, pady=8); br.pack(anchor="w")
         make_btn(br, " ► ANALYZE ", self._do_avalanche, bg=YELLOW, fg=BG).pack(side="left")
 
-        c2c, b2 = make_card(tab, "SAC ANALYSIS  [ Strict Avalanche Criterion ]", "[~]")
-        c2c.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0,6))
+        # Create a two-column area: left = chart/summary, right = per-iteration details
+        wrapper = tk.Frame(tab, bg=BG)
+        wrapper.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0,6))
+        wrapper.columnconfigure(0, weight=1)
+        wrapper.columnconfigure(1, weight=1)
+
+        c_left, b_left = make_card(wrapper, "SAC ANALYSIS  [ Strict Avalanche Criterion ]", "[~]")
+        c_left.grid(row=0, column=0, sticky="nsew", padx=(0,8))
+        c_right, b_right = make_card(wrapper, "PER-ITERATION OUTPUT", "[>]")
+        c_right.grid(row=0, column=1, sticky="nsew")
         tab.rowconfigure(1, weight=1)
-        self.av_out = make_output(b2, height=20)
+        self.av_out = make_output(b_left, height=20)
+        self.av_details = make_output(b_right, height=20)
 
         sf, self.av_status = statusbar(tab)
         sf.grid(row=2, column=0, sticky="ew", padx=14, pady=(0,10))
@@ -504,7 +513,7 @@ class XDESApp(tk.Tk):
         pt_b = pt_str.encode("utf-8")[:16].ljust(16, b'\x00')
         set_status(self.av_status, "SYS::RUNNING  KDF + 128 evaluations…", YELLOW); self.update()
 
-        avg, pct, results = avalanche_analysis(pt_b, pw_str.encode())
+        avg, pct, results, iterations = avalanche_analysis(pt_b, pw_str.encode())
         worst_v = min(results); best_v = max(results)
         worst_i = results.index(worst_v); best_i  = results.index(best_v)
         verdict = "✓ STRONG — PASSES SAC" if pct >= 45 else "⚠ WEAK — FAILS SAC"
@@ -534,8 +543,23 @@ class XDESApp(tk.Tk):
             flag  = " ◄WORST" if i==worst_i else (" ◄BEST" if i==best_i else "")
             tg    = "warn" if i==worst_i else ("hi" if i==best_i else "ok")
             lines.append((f"  {i:03d}   {d:03d}/128  {bar}  {pi:5.1f}%  {flag}\n", tg))
-
         out_write(self.av_out, lines)
+
+        # Write detailed per-iteration lines to the right-hand panel
+        detail_lines = [("┌──────────────────────────────────────────────┐\n","dim"),
+                        ("│   PER-ITERATION DETAILS (bit, diff, xor, ct) │\n","head"),
+                        ("└──────────────────────────────────────────────┘\n","dim"),
+                        ("\n","dim")]
+        for it in iterations:
+            b = it["bit"]
+            d = it["diff"]
+            xor = it["xor_hex"].upper()
+            ct  = it["ct_hex"].upper()
+            detail_lines.append((f"bit {b:03d} : {d:03d} bits changed\n","ok"))
+            detail_lines.append((f"  XOR  => {xor}\n","dim"))
+            detail_lines.append((f"  CT   => {ct}\n\n","dim"))
+
+        out_write(self.av_details, detail_lines)
         color = ACCENT if pct>=45 else YELLOW
         set_status(self.av_status,
             f"SYS::DONE  avalanche={pct:.2f}%  {'PASS' if pct>=45 else 'FAIL'}", color)
