@@ -489,16 +489,18 @@ class XDESApp(tk.Tk):
         br = tk.Frame(b, bg=PANEL, pady=8); br.pack(anchor="w")
         make_btn(br, " ► ANALYZE ", self._do_avalanche, bg=YELLOW, fg=BG).pack(side="left")
 
-        # Create a two-column area: left = chart/summary, right = per-iteration details
+        # Two-column area: left = chart/summary, right = per-iteration details
         wrapper = tk.Frame(tab, bg=BG)
         wrapper.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0,6))
         wrapper.columnconfigure(0, weight=1)
         wrapper.columnconfigure(1, weight=1)
+        wrapper.rowconfigure(0, weight=1)
 
         c_left, b_left = make_card(wrapper, "SAC ANALYSIS  [ Strict Avalanche Criterion ]", "[~]")
         c_left.grid(row=0, column=0, sticky="nsew", padx=(0,8))
         c_right, b_right = make_card(wrapper, "PER-ITERATION OUTPUT", "[>]")
         c_right.grid(row=0, column=1, sticky="nsew")
+
         tab.rowconfigure(1, weight=1)
         self.av_out = make_output(b_left, height=20)
         self.av_details = make_output(b_right, height=20)
