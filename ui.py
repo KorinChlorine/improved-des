@@ -478,6 +478,9 @@ class XDESApp(tk.Tk):
         lbl(c1, "PLAINTEXT  [ up to 16 chars ]").pack(anchor="w", pady=(0,2))
         w, self.av_pt = make_entry(c1); w.pack(fill="x")
         self.av_pt.insert(0, "HELLO XDES-A!!")
+        lbl(c1, "PLAINTEXT HEX  [ up to 32 hex chars — optional, overrides text ]").pack(anchor="w", pady=(6,2))
+        w, self.av_pt_hex = make_entry(c1, width=48, fg=ACCENT)
+        w.pack(fill="x")
 
         lbl(c2, "PASSWORD").pack(anchor="w", pady=(0,2))
         w, self.av_pw = make_entry(c2, fg=CYAN); w.pack(fill="x")
@@ -509,13 +512,32 @@ class XDESApp(tk.Tk):
         sf.grid(row=2, column=0, sticky="ew", padx=14, pady=(0,10))
 
     def _do_avalanche(self):
-        pt_str = self.av_pt.get(); pw_str = self.av_pw.get()
-        if not pt_str or not pw_str:
-            out_write(self.av_out, [("!! Both fields required.\n","err")]); return
-        pt_b = pt_str.encode("utf-8")[:16].ljust(16, b'\x00')
+        pt_hex = self.av_pt_hex.get().strip()
+        pt_str = self.av_pt.get().strip()
+        pw_str = self.av_pw.get()
+        if not (pt_hex or pt_str) or not pw_str:
+            out_write(self.av_out, [("!! Plaintext (text or hex) and password required.\n","err")]); return
+
+        if pt_hex:
+            h = pt_hex.strip()
+            if h.startswith("0x") or h.startswith("0X"):
+                h = h[2:]
+            h = ''.join(h.split())
+            try:
+                pt_b = bytes.fromhex(h)
+            except ValueError:
+                out_write(self.av_out, [("!! Invalid hex string.\n","err")]); return
+            if len(pt_b) > 16:
+                out_write(self.av_out, [(f"!! Hex plaintext > 16 bytes ({len(pt_b)}).\n","err")]); return
+            pt_b = pt_b.ljust(16, b'\x00')
+        else:
+            pt_b = pt_str.encode("utf-8")[:16].ljust(16, b'\x00')
         set_status(self.av_status, "SYS::RUNNING  KDF + 128 evaluations…", YELLOW); self.update()
 
         avg, pct, results, iterations = avalanche_analysis(pt_b, pw_str.encode())
+        # reproduce base ciphertext (salt=0x00*16 used inside avalanche_analysis)
+        keys_for_base = derive_keys(pw_str.encode(), bytes(16))
+        base_ct = xdes_encrypt_block(pt_b, keys_for_base)
         worst_v = min(results); best_v = max(results)
         worst_i = results.index(worst_v); best_i  = results.index(best_v)
         verdict = "✓ STRONG — PASSES SAC" if pct >= 45 else "⚠ WEAK — FAILS SAC"
@@ -525,6 +547,7 @@ class XDESApp(tk.Tk):
             ("│       XDES-A  ::  STRICT AVALANCHE CRITERION TEST       │\n","head"),
             ("└──────────────────────────────────────────────────────────┘\n","dim"),
             (f"\n  INPUT       >> {pt_b.hex().upper()}\n","ok"),
+            (f"  BASE CT    >> {base_ct.hex().upper()}\n","ok"),
             (f"  BITS TESTED >> 128  (each bit flipped once)\n","dim"),
             ("\n  ── SUMMARY ─────────────────────────────────────────────\n","cyan"),
             (f"  AVG DELTA   >> {avg:.2f} / 128  bits changed\n","hi"),
@@ -549,9 +572,10 @@ class XDESApp(tk.Tk):
 
         # Write detailed per-iteration lines to the right-hand panel
         detail_lines = [("┌──────────────────────────────────────────────┐\n","dim"),
-                        ("│   PER-ITERATION DETAILS (bit, diff, xor, ct) │\n","head"),
-                        ("└──────────────────────────────────────────────┘\n","dim"),
-                        ("\n","dim")]
+                ("│   PER-ITERATION DETAILS (bit, diff, xor, ct) │\n","head"),
+                ("└──────────────────────────────────────────────┘\n","dim"),
+                ("\n","dim"),
+                (f"BASE CT => {base_ct.hex().upper()}\n\n","ok")]
         for it in iterations:
             b = it["bit"]
             d = it["diff"]
