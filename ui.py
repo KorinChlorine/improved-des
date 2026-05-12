@@ -12,6 +12,7 @@ import multiprocessing as mp
 
 from cipher import (
     xdes_a_encrypt, xdes_a_decrypt, avalanche_analysis,
+    manual_bit_flipper,
     derive_keys, _xor_bytes, _feistel_half, _ctr_keystream_block,
     bytes_to_bits, bits_to_bytes, permute, xor_bits, feistel,
     IP, IP_INV, WEAK_PASSWORDS, estimate_crack_time,
@@ -492,6 +493,14 @@ class XDESApp(tk.Tk):
         br = tk.Frame(b, bg=PANEL, pady=8); br.pack(anchor="w")
         make_btn(br, " ► ANALYZE ", self._do_avalanche, bg=YELLOW, fg=BG).pack(side="left")
 
+        # Manual bit flipper: allow entering comma/range list of bit indexes 0-127
+        br2 = tk.Frame(b, bg=PANEL, pady=6); br2.pack(fill="x")
+        lbl(br2, "Manual flips (e.g. 0,1,5-8)  [bit indexes 0-127]", fg=FG_DIMMER).pack(anchor="w")
+        row2 = tk.Frame(br2, bg=PANEL); row2.pack(fill="x", pady=(6,0))
+        w, self.av_manual = make_entry(row2, width=48, fg=ACCENT)
+        w.pack(side="left", fill="x", expand=True)
+        make_btn(row2, " ► FLIP BITS ", self._do_manual_flip, bg=CYAN, fg=BG).pack(side="left", padx=(8,0))
+
         # Two-column area: left = chart/summary, right = per-iteration details
         wrapper = tk.Frame(tab, bg=BG)
         wrapper.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0,6))
@@ -589,6 +598,126 @@ class XDESApp(tk.Tk):
         color = ACCENT if pct>=45 else YELLOW
         set_status(self.av_status,
             f"SYS::DONE  avalanche={pct:.2f}%  {'PASS' if pct>=45 else 'FAIL'}", color)
+
+    def _do_manual_flip(self):
+        pt_hex = self.av_pt_hex.get().strip()
+        pt_str = self.av_pt.get().strip()
+        pw_str = self.av_pw.get()
+        bits_str = self.av_manual.get().strip()
+        if not (pt_hex or pt_str) or not pw_str:
+            out_write(self.av_details, [("!! Plaintext (text or hex) and password required.\n","err")]); return
+
+        if pt_hex:
+            h = pt_hex.strip()
+            if h.startswith("0x") or h.startswith("0X"):
+                h = h[2:]
+            h = ''.join(h.split())
+            try:
+                pt_b = bytes.fromhex(h)
+            except ValueError:
+                out_write(self.av_details, [("!! Invalid hex string.\n","err")]); return
+            if len(pt_b) > 16:
+                out_write(self.av_details, [(f"!! Hex plaintext > 16 bytes ({len(pt_b)}).\n","err")]); return
+            pt_b = pt_b.ljust(16, b'\x00')
+        else:
+            pt_b = pt_str.encode("utf-8")[:16].ljust(16, b'\x00')
+
+        # parse bits list (allow comma-separated and ranges like 3-7)
+        def parse_bits(s):
+            s = s.strip()
+            if not s:
+                return []
+            parts = [p.strip() for p in s.split(',') if p.strip()]
+            out = set()
+            for p in parts:
+                if '-' in p:
+                    try:
+                        a,b = p.split('-',1)
+                        a = int(a); b = int(b)
+                        for i in range(min(a,b), max(a,b)+1):
+                            out.add(i)
+                    except Exception:
+                        continue
+                else:
+                    try:
+                        out.add(int(p))
+                    except Exception:
+                        continue
+            return sorted(i for i in out if 0 <= i < 128)
+
+        flips = parse_bits(bits_str)
+        if not flips:
+            out_write(self.av_details, [("!! No valid bit indexes provided (0-127).\n","err")]); return
+
+        set_status(self.av_status, "SYS::RUNNING  manual bit flip…", YELLOW); self.update()
+        try:
+            res = manual_bit_flipper(pt_b, pw_str.encode(), flips)
+        except Exception as ex:
+            out_write(self.av_details, [(f"!! FLIP ERROR: {ex}\n","err")]); set_status(self.av_status, f"SYS::ERR  {ex}", RED); return
+
+        lines = [
+            ("┌──────────────────────────────────────────────────────────┐\n","dim"),
+            ("│           MANUAL BIT FLIP  ::  COMPARISON REPORT         │\n","head"),
+            ("└──────────────────────────────────────────────────────────┘\n","dim"),
+            ("\n","dim"),
+            (f"  FLIPPED BITS    >> {flips}\n","ok"),
+            (f"  INPUT HEX       >> {res['pt_hex'].upper()}\n","ok"),
+            (f"  FLIPPED INPUT   >> {res['flipped_pt_hex'].upper()}\n","hi"),
+            (f"  INPUT XOR       >> {res['input_xor_hex'].upper()}\n","dim"),
+            (f"  INPUT BITS CHANGED >> {res['input_changed_count']}  {res['input_changed']}\n\n","ok"),
+            (f"  BASE CT         >> {res['base_ct_hex'].upper()}\n","ok"),
+            (f"  FLIPPED CT      >> {res['flipped_ct_hex'].upper()}\n","hi"),
+            (f"  CT XOR          >> {res['output_xor_hex'].upper()}\n","dim"),
+            (f"  OUTPUT BITS CHANGED >> {res['output_changed_count']}\n","ok"),
+        ]
+
+        # show list of output changed bit indices, in chunks for readability
+        oc = res['output_changed']
+        if oc:
+            # show human-readable list in chunks
+            oc_chunks = [oc[i:i+16] for i in range(0, len(oc), 16)]
+            for c in oc_chunks:
+                lines.append((f"    {c}\n","hi"))
+        else:
+            lines.append((("    <none>\n","dim")))
+
+        # Show per-byte binary with changed bits highlighted
+        try:
+            base_ct_b = bytes.fromhex(res['base_ct_hex'])
+            flipped_ct_b = bytes.fromhex(res['flipped_ct_hex'])
+            xor_b = bytes.fromhex(res['output_xor_hex'])
+            lines.append(("\n  OUTPUT BYTES (binary) — changed bits highlighted:\n","cyan"))
+            for byte_idx in range(len(base_ct_b)):
+                # header for this byte
+                lines.append((f"  BYTE {byte_idx:02d}  {base_ct_b[byte_idx]:02X} -> {flipped_ct_b[byte_idx]:02X}  ","dim"))
+                # base bits (MSB->LSB)
+                for bit_in in range(8):
+                    global_bit = byte_idx*8 + bit_in
+                    bit_val = (base_ct_b[byte_idx] >> (7-bit_in)) & 1
+                    tag = "hi" if global_bit in oc else "dim"
+                    lines.append((str(bit_val), tag))
+                lines.append(("  ->  ","dim"))
+                # flipped bits
+                for bit_in in range(8):
+                    global_bit = byte_idx*8 + bit_in
+                    bit_val = (flipped_ct_b[byte_idx] >> (7-bit_in)) & 1
+                    tag = "hi" if global_bit in oc else "dim"
+                    lines.append((str(bit_val), tag))
+                lines.append(("\n","dim"))
+            # final XOR line
+            lines.append(("\n  XOR BITS (1 = changed): \n","dim"))
+            for byte_idx in range(len(xor_b)):
+                lines.append((f"  BYTE {byte_idx:02d}  ","dim"))
+                for bit_in in range(8):
+                    bit_val = (xor_b[byte_idx] >> (7-bit_in)) & 1
+                    tag = "hi" if bit_val else "dim"
+                    lines.append((str(bit_val), tag))
+                lines.append(("\n","dim"))
+        except Exception:
+            pass
+
+        out_write(self.av_details, lines)
+        set_status(self.av_status, f"SYS::DONE  flipped={len(flips)} out_changed={res['output_changed_count']}", ACCENT)
 
     # ══════════════════════════════════════════
     #  TAB 04 — STEP TRACE
