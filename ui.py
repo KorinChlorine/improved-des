@@ -232,7 +232,7 @@ class XDESApp(tk.Tk):
         self._title_lbl.pack(anchor="w")
 
         tk.Label(left,
-            text="  ARGON2ID · 128-BIT FEISTEL · CTR · HMAC-SHA256 · ACADEMIC DEMO",
+            text="  ARGON2ID · 128-BIT FEISTEL · CTR · HMAC-SHA256 · DES",
             font=("Courier New", 8), bg=BG2, fg=FG_DIMMER).pack(anchor="w")
 
         right = tk.Frame(inner, bg=BG2)
