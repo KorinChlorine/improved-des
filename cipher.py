@@ -291,6 +291,54 @@ def avalanche_analysis(plaintext: bytes, password: bytes):
     avg = sum(results) / 128
     return avg, (avg / 128) * 100, results, iterations
 
+
+def manual_bit_flipper(plaintext: bytes, password: bytes, flip_positions: list):
+    """Flip specified plaintext bit positions (0-127) once, using fixed zero salt
+    for deterministic keys. Returns a dict with base/flipped plaintext and
+    ciphertext hex, xor values, and lists of changed input/output bit indices.
+    """
+    pt = (plaintext + bytes(16))[:16]
+    keys = derive_keys(password, bytes(16))
+    base_ct = xdes_encrypt_block(pt, keys)
+
+    flipped = bytearray(pt)
+    for bit_pos in flip_positions:
+        if 0 <= bit_pos < 128:
+            byte_idx = bit_pos // 8
+            bit_idx = 7 - (bit_pos % 8)
+            flipped[byte_idx] ^= (1 << bit_idx)
+    flipped = bytes(flipped)
+
+    flipped_ct = xdes_encrypt_block(flipped, keys)
+
+    input_xor = bytes(a ^ b for a, b in zip(pt, flipped))
+    output_xor = bytes(a ^ b for a, b in zip(base_ct, flipped_ct))
+
+    def bits_set(bts):
+        out = []
+        for i in range(128):
+            byte_i = i // 8
+            bit_i  = 7 - (i % 8)
+            if (bts[byte_i] >> bit_i) & 1:
+                out.append(i)
+        return out
+
+    input_changed = bits_set(input_xor)
+    output_changed = bits_set(output_xor)
+
+    return {
+        "pt_hex": pt.hex(),
+        "flipped_pt_hex": flipped.hex(),
+        "base_ct_hex": base_ct.hex(),
+        "flipped_ct_hex": flipped_ct.hex(),
+        "input_xor_hex": input_xor.hex(),
+        "output_xor_hex": output_xor.hex(),
+        "input_changed": input_changed,
+        "output_changed": output_changed,
+        "input_changed_count": len(input_changed),
+        "output_changed_count": len(output_changed),
+    }
+
 # ─────────────────────────────────────────────
 #  BRUTE FORCE HELPERS
 # ─────────────────────────────────────────────
