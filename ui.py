@@ -493,7 +493,6 @@ class XDESApp(tk.Tk):
         br = tk.Frame(b, bg=PANEL, pady=8); br.pack(anchor="w")
         make_btn(br, " ► ANALYZE ", self._do_avalanche, bg=YELLOW, fg=BG).pack(side="left")
 
-        # Manual bit flipper: allow entering comma/range list of bit indexes 0-127
         br2 = tk.Frame(b, bg=PANEL, pady=6); br2.pack(fill="x")
         lbl(br2, "Manual flips (e.g. 0,1,5-8)  [bit indexes 0-127]", fg=FG_DIMMER).pack(anchor="w")
         row2 = tk.Frame(br2, bg=PANEL); row2.pack(fill="x", pady=(6,0))
@@ -501,7 +500,6 @@ class XDESApp(tk.Tk):
         w.pack(side="left", fill="x", expand=True)
         make_btn(row2, " ► FLIP BITS ", self._do_manual_flip, bg=CYAN, fg=BG).pack(side="left", padx=(8,0))
 
-        # Two-column area: left = chart/summary, right = per-iteration details
         wrapper = tk.Frame(tab, bg=BG)
         wrapper.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0,6))
         wrapper.columnconfigure(0, weight=1)
@@ -544,7 +542,6 @@ class XDESApp(tk.Tk):
         set_status(self.av_status, "SYS::RUNNING  KDF + 128 evaluations…", YELLOW); self.update()
 
         avg, pct, results, iterations = avalanche_analysis(pt_b, pw_str.encode())
-        # reproduce base ciphertext (salt=0x00*16 used inside avalanche_analysis)
         keys_for_base = derive_keys(pw_str.encode(), bytes(16))
         base_ct = xdes_encrypt_block(pt_b, keys_for_base)
         worst_v = min(results); best_v = max(results)
@@ -579,7 +576,6 @@ class XDESApp(tk.Tk):
             lines.append((f"  {i:03d}   {d:03d}/128  {bar}  {pi:5.1f}%  {flag}\n", tg))
         out_write(self.av_out, lines)
 
-        # Write detailed per-iteration lines to the right-hand panel
         detail_lines = [("┌──────────────────────────────────────────────┐\n","dim"),
                 ("│   PER-ITERATION DETAILS (bit, diff, xor, ct) │\n","head"),
                 ("└──────────────────────────────────────────────┘\n","dim"),
@@ -622,7 +618,6 @@ class XDESApp(tk.Tk):
         else:
             pt_b = pt_str.encode("utf-8")[:16].ljust(16, b'\x00')
 
-        # parse bits list (allow comma-separated and ranges like 3-7)
         def parse_bits(s):
             s = s.strip()
             if not s:
@@ -671,17 +666,14 @@ class XDESApp(tk.Tk):
             (f"  OUTPUT BITS CHANGED >> {res['output_changed_count']}\n","ok"),
         ]
 
-        # show list of output changed bit indices, in chunks for readability
         oc = res['output_changed']
         if oc:
-            # show human-readable list in chunks
             oc_chunks = [oc[i:i+16] for i in range(0, len(oc), 16)]
             for c in oc_chunks:
                 lines.append((f"    {c}\n","hi"))
         else:
             lines.append((("    <none>\n","dim")))
 
-        # Show per-byte binary with changed bits highlighted
         try:
             base_ct_b = bytes.fromhex(res['base_ct_hex'])
             flipped_ct_b = bytes.fromhex(res['flipped_ct_hex'])
